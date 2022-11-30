@@ -1,12 +1,20 @@
 import UIKit
 
-final class MovieQuizViewController: UIViewController {
+final class MovieQuizViewController: UIViewController, QuestionFactoryDelegate {
+    
+    
+    
+    
+    
+    
+    
     
     private var currentQuestionIndex = 0
-    
-    private var questionsAmount: Int = 10
-    private var questionFactory: QuestionFactory = QuestionFactory()
+    private var questionsAmount = 10
+    private var questionFactory: QuestionFactoryProtocol?
     private var currentQuestion: QuizQuestion?
+    private var alertPresenter: AlertPresenterProtocol?
+    private var statisticService: StatisticService?
     
     private var countCorrectAnswer = 0
     
@@ -47,22 +55,22 @@ final class MovieQuizViewController: UIViewController {
             self.buttonYes.isEnabled = true
         }
         
-            
+        
     }
     
     private func convert(model: QuizQuestion) -> QuizStepViewModel {
-            return QuizStepViewModel (image: UIImage(named: model.image) ?? UIImage(),
-                                      question: model.text,
-                                      questionNumber: "\(currentQuestionIndex + 1)/\(questionsAmount)")
-                
-            }
-
+        return QuizStepViewModel (image: UIImage(named: model.image) ?? UIImage(),
+                                  question: model.text,
+                                  questionNumber: "\(currentQuestionIndex + 1)/\(questionsAmount)")
+        
+    }
+    
     
     private func show(quiz step: QuizStepViewModel) {
         imageView.image = step.image
         textLabel.text = step.question
         counterLabel.text = step.questionNumber
-        }
+    }
     
     private func showAnswerResult(isCorrect: Bool) {
         imageView.layer.masksToBounds = true
@@ -74,73 +82,120 @@ final class MovieQuizViewController: UIViewController {
             countCorrectAnswer += 1
         }
         
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                guard let self = self else { return }
-                self.showNextQuestionOrResults()
-                self.imageView.layer.borderWidth = 0
-                
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self else { return }
+            self.showNextQuestionOrResults()
+            self.imageView.layer.borderWidth = 0
             
-            }
-        }
-
-    
-    private func showNextQuestionOrResults() {
-        
-        if currentQuestionIndex == questionsAmount - 1 {
-            let textResult = countCorrectAnswer == questionsAmount ?
-                    "Поздравляем, Вы ответили на 10 из 10!" :
-                    "Вы ответили на \(countCorrectAnswer) из 10, попробуйте ещё раз!"
             
-            let viewResult = QuizResultsViewModel(
-                        title: "Этот раунд окончен!",
-                        text: textResult,
-                        buttonText: "Сыграть ещё раз")
-                    show(quiz: viewResult)
-        } else {
-            currentQuestionIndex += 1
-            if let nextQuestion = questionFactory.requestNextQuestion() {
-                currentQuestion = nextQuestion
-                let viewModel = convert(model: nextQuestion)
-                
-                show(quiz: viewModel)
-            } 
         }
     }
     
-    private func show(quiz result: QuizResultsViewModel) {
+    
+    private func completion() {
         imageView.layer.cornerRadius = 20
-        let alert = UIAlertController(
-            title: result.title,
-            message: result.text,
-            preferredStyle: .alert)
-        let action = UIAlertAction(title: result.buttonText, style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.currentQuestionIndex = 0
-            self.countCorrectAnswer = 0
-            
-            if let firstQuestion = self.questionFactory.requestNextQuestion() {
-                self.currentQuestion = firstQuestion
-                let viewModel = self.convert(model: firstQuestion)
-                
-                self.show(quiz: viewModel)
-            }
-            
+        currentQuestionIndex = 0
+        countCorrectAnswer = 0
+        questionFactory?.requestNextQuestion()
+    }
+    private func convertAlertModel(model: QuizResultsViewModel) -> AlertModel {
+            return AlertModel(title: model.title,
+                              message: model.text,
+                              buttonText: model.buttonText,
+                              completion: completion)
         }
-        alert.addAction(action)
-        self.present(alert, animated: true, completion: nil)
+//    private func convertGameRecord(model: GameRecord) -> String {
+//        return
+//    }
+
+    private func showNextQuestionOrResults() {
+        let alertModel = QuizResultsViewModel(title: "Этот раунд окончен!",
+                                              text: """
+                                               Ваш результат: \(countCorrectAnswer)/10
+                                               Количество завершённых квизов: \(String(describing: statisticService!.gamesCount))
+                                               Рекорд: \(String(describing: statisticService!.bestGame.correct))/\(String(describing: statisticService!.bestGame.total)) (\(String(describing: statisticService!.bestGame.date))
+                                               Средняя точность: \(String(format: "%.2f", statisticService!.totalAccuracy))%
+                                               """,
+                                              buttonText: "Сыграть еще раз!")
+        let modelResult = convertAlertModel(model: alertModel)
+        guard let setNewValue = statisticService?.gamesCount else {return }
+        
+        if currentQuestionIndex == questionsAmount - 1 {
+           
+            alertPresenter?.show(quiz: modelResult)
+            setNewGameCount(with: setNewValue + 1)
+            setStoreGameResult(correctAnswersNumber: countCorrectAnswer, totalQuestionsNumber: questionsAmount)
+            setStoreRecord(correct: countCorrectAnswer , total: questionsAmount)
+            
+        } else {
+            currentQuestionIndex += 1
+            questionFactory?.requestNextQuestion()
+        }
+    }
+    
+    func setStoreRecord(correct count: Int, total amount: Int) {
+        statisticService?.storeRecord(correct: count, total: amount)
+    }
+    
+    
+    func setNewGameCount(with gameCount: Int) {
+        statisticService?.setGameCount(gamesCount: gameCount)
+        }
+    
+    func setStoreGameResult(correctAnswersNumber: Int, totalQuestionsNumber: Int) {
+        
+            statisticService?.storeGameResult(correctAnswersNumber: correctAnswersNumber , totalQuestionsNumber: totalQuestionsNumber)
+        
     }
     
     
     override func viewDidLoad() {
         super.viewDidLoad()
-        if let firstQuestion = questionFactory.requestNextQuestion() {
-            currentQuestion = firstQuestion
-        let viewModel = convert(model: firstQuestion)
-        show(quiz: viewModel)
+        questionFactory = QuestionFactory(delegate: self)
+        questionFactory?.requestNextQuestion()
+        alertPresenter = AlertPresenter(controller: self)
+        statisticService = StatisticServiceImplementation()
+        
+
+        func string(from documentDirectory: URL) throws -> String {
+            if !FileManager.default.fileExists(atPath: documentDirectory.path) {
+                throw FileManagerError.fileDoesntExist
+            }
+            return try String(contentsOf: documentDirectory)
+        }
+
+//        let documentDirectory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+//        let fileURL = documentDirectory.appendingPathComponent("top250MoviesIMDB.json")
+//        let top250MoviesIMDB = try! string(from: fileURL)
+//        guard let data = top250MoviesIMDB.data(using: .utf8) else {return}
+//        do {
+//            let movie = try JSONDecoder().decode(Movie.self, from: data)
+//            let result = try? JSONDecoder().decode(Top.self, from: data)
+//        } catch {
+//            print("Failed to parse: \(error.localizedDescription)")
+//
+//        }
+        
+        
+        enum FileManagerError: Error {
+            case fileDoesntExist
         }
     }
-}
+    // MARK: - QuestionFactoryDelegate
+    func didReceiveNextQuestion(question: QuizQuestion?) {
+        guard let question = question else {
+            return
+        }
+        currentQuestion = question
+        let viewModel = convert(model: question)
+        DispatchQueue.main.async { [weak self] in
+            self?.show(quiz: viewModel)
+        }
+    }
+    
+    
 
+}
 
 
 
